@@ -1,0 +1,161 @@
+---
+- name: Install InfraWatch monitoring stack
+  hosts: monitoring_server
+  become: yes
+
+  tasks:
+
+    - name: Update apt packages
+      apt:
+        update_cache: yes
+
+    - name: Install dependencies
+      apt:
+        name: [curl, wget, gnupg, apt-transport-https]
+        state: present
+
+    # --- InfluxDB ---
+    - name: Add InfluxDB GPG key
+      shell: |
+        curl -fsSL https://repos.influxdata.com/influxdata-archive.key -o /tmp/influx.key
+        gpg --dearmor /tmp/influx.key
+        mv /tmp/influx.key.gpg /usr/share/keyrings/influxdata-archive.gpg
+      args:
+        creates: /usr/share/keyrings/influxdata-archive.gpg    
+
+    - name: Add InfluxDB repo
+      shell: |
+        echo "deb [signed-by=/usr/share/keyrings/influxdata-archive.gpg] \
+        https://repos.influxdata.com/ubuntu jammy stable" | \
+        tee /etc/apt/sources.list.d/influxdata.list
+
+    - name: Install InfluxDB
+      apt:
+        name: influxdb
+        update_cache: yes
+        state: present
+
+    - name: Start and enable InfluxDB
+      systemd:
+        name: influxdb
+        state: started
+        enabled: yes
+
+    - name: Create telegraf database in InfluxDB
+      shell: influx -execute "CREATE DATABASE telegraf"
+      ignore_errors: yes
+
+    # --- Telegraf ---
+    - name: Install Telegraf
+      apt:
+        name: telegraf
+        state: present
+
+    - name: Copy Telegraf config
+      copy:
+        src: ../telegraf/telegraf.conf
+        dest: /etc/telegraf/telegraf.conf
+        mode: '0644'
+
+    - name: Start and enable Telegraf
+      systemd:
+        name: telegraf
+        state: started
+        enabled: yes
+
+    # --- Grafana ---
+   # - name: Add Grafana GPG key
+    #  shell: |
+     #   wget -q -O - https://packages.grafana.com/gpg.key | \
+      #  gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+
+     #- name: Add Grafana repo
+      #shell: |
+       # echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] \
+        #https://packages.grafana.com/oss/deb stable main" | \
+        #tee /etc/apt/sources.list.d/grafana.list
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        update_cache: yes
+        state: present
+
+    - name: Start and enable Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+
+    # --- Loki ---
+    - name: Create Loki directory
+      file:
+        path: /opt/loki
+        state: directory
+
+    - name: Download Loki binary
+      get_url:
+        url: https://github.com/grafana/loki/releases/download/v2.9.0/loki-linux-amd64.zip
+        dest: /tmp/loki.zip
+
+    - name: Unzip Loki
+      unarchive:
+        src: /tmp/loki.zip
+        dest: /usr/local/bin/
+        remote_src: yes
+
+    - name: Rename Loki binary
+      command: mv /usr/local/bin/loki-linux-amd64 /usr/local/bin/loki
+      ignore_errors: yes
+
+    - name: Create Loki config
+      copy:
+        dest: /etc/loki-config.yml
+        content: |
+          auth_enabled: false
+          server:
+            http_listen_port: 3100
+          ingester:
+            lifecycler:
+              ring:
+                kvstore:
+                  store: inmemory
+                replication_factor: 1
+          schema_config:
+            configs:
+              - from: 2020-10-24
+                store: boltdb-shipper
+                object_store: filesystem
+                schema: v11
+                index:
+                  prefix: index_
+                  period: 24h
+          storage_config:
+            boltdb_shipper:
+              active_index_directory: /tmp/loki/index
+              cache_location: /tmp/loki/cache
+            filesystem:
+              directory: /tmp/loki/chunks
+          limits_config:
+            reject_old_samples: true
+            reject_old_samples_max_age: 168h
+
+    - name: Create Loki systemd service
+      copy:
+        dest: /etc/systemd/system/loki.service
+        content: |
+          [Unit]
+          Description=Loki log aggregation
+          After=network.target
+          [Service]
+          ExecStart=/usr/local/bin/loki -config.file=/etc/loki-config.yml
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start and enable Loki
+      systemd:
+        name: loki
+        state: started
+        enabled: yes
+        daemon_reload: yes
