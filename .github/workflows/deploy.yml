@@ -27,7 +27,18 @@ jobs:
         run: telegraf --config telegraf/telegraf.conf --test --once
         continue-on-error: true
 
-      - name: Validate dashboard JSON
+      - name: Validate Grafana dashboard JSON
         run: |
           python3 -c "import json; json.load(open('grafana/dashboards/infrawatch.json'))"
           echo "Dashboard JSON is valid"
+
+      - name: Check all required files exist
+        run: |
+          echo "Checking project structure..."
+          ls terraform/main.tf && echo "Terraform: OK"
+          ls ansible/playbook.yml && echo "Ansible: OK"
+          ls telegraf/telegraf.conf && echo "Telegraf: OK"
+          ls grafana/dashboards/infrawatch.json && echo "Grafana: OK"
+          ls loki/loki-config.yml && echo "Loki: OK"
+          ls promtail/promtail-config.yml && echo "Promtail: OK"
+          echo "All checks passed!"
