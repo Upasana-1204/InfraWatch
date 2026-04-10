@@ -1,0 +1,33 @@
+name: InfraWatch CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate-configs:
+    name: Validate Telegraf config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Install Telegraf
+        run: |
+          curl -fsSL https://repos.influxdata.com/influxdata-archive.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/influxdata-archive.gpg
+          echo "deb [signed-by=/usr/share/keyrings/influxdata-archive.gpg] \
+            https://repos.influxdata.com/ubuntu jammy stable" | \
+            sudo tee /etc/apt/sources.list.d/influxdata.list
+          sudo apt update && sudo apt install telegraf -y
+
+      - name: Validate Telegraf config syntax
+        run: telegraf --config telegraf/telegraf.conf --test --once
+        continue-on-error: true
+
+      - name: Validate dashboard JSON
+        run: |
+          python3 -c "import json; json.load(open('grafana/dashboards/infrawatch.json'))"
+          echo "Dashboard JSON is valid"
